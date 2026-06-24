@@ -11,7 +11,7 @@ from pytz import UTC
 from requests import RequestException
 
 CO2_SIGNAL_REQ_INTERVAL = 600
-CO2_SIGNAL_URL = "https://api.co2signal.com"
+CO2_SIGNAL_URL = "https://api.electricitymaps.com"
 TIMEOUT_IN_S = 10
 logger = logging.getLogger(__name__)
 
@@ -64,22 +64,29 @@ class Ecomix:
             try:
                 now = datetime.utcnow().replace(tzinfo=UTC)
                 country_code = Ecomix.get_country(latitude, longitude, country_code_default)
-                assert country_code is not None
+                if country_code is None:
+                    logger.warning("Can't find country for %s %s", latitude, longitude)
+                    return False
                 if country_code not in Ecomix._cache:
                     Ecomix._cache[country_code] = []
                 elif len(Ecomix._cache[country_code]) > 0 and \
                         (now - Ecomix._cache[country_code][-1][0]).total_seconds() < CO2_SIGNAL_REQ_INTERVAL:
                     return False
-                res = requests.get(CO2_SIGNAL_URL + "/v1/latest",
+                res = requests.get(CO2_SIGNAL_URL + "/v3/carbon-intensity/latest",
                                    headers={"auth-token": Ecomix.co2_signal_key},
-                                   params={"countryCode": country_code},
+                                   params={"zone": country_code},
                                    timeout=TIMEOUT_IN_S)
+                if res.status_code != 200:
+                    return False
+
                 data = res.json()
-                value = data["data"]["carbonIntensity"]
-                assert isinstance(value, numbers.Number)
+                value = data["carbonIntensity"]
+                if not isinstance(value, numbers.Number):
+                    logger.error("carbonIntensity invalid value: '%s'", value)
+                    return False
                 Ecomix._cache[country_code].append([now, value])
-                return data["status"] == "ok"
-            except (AssertionError, NameError, KeyError):
+                return True
+            except (NameError, KeyError):
                 logger.debug("ecomix:", exc_info=True)
                 return False
         else:
